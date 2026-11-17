@@ -1,4 +1,3 @@
-
 name: WORLD LIFE 3D - Android Build
 
 on:
@@ -24,39 +23,41 @@ jobs:
       CMAKE_VERSION: "3.10.2.4988404"
 
     steps:
-      # 1. Download project
       - name: Checkout Repository
         uses: actions/checkout@v5
 
-      # 2. Install Java
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      # 3. Check Android SDK
-      - name: Configure Android SDK
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK Packages
         shell: bash
         run: |
           set -euo pipefail
 
-          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          SDKMANAGER="$(command -v sdkmanager || true)"
 
-          if [ -z "$SDK_ROOT" ]; then
-            echo "ERROR: Android SDK not found."
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}" \
+              -type f -name sdkmanager -print -quit 2>/dev/null || true)"
+          fi
+
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager is missing or is not executable."
+            echo "ANDROID_HOME=${ANDROID_HOME:-not-set}"
+            find "${ANDROID_HOME:-/usr/local/lib/android/sdk}" \
+              -maxdepth 5 -type f -name sdkmanager -print 2>/dev/null || true
             exit 1
           fi
 
-          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-
-          if [ ! -f "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "$SDK_ROOT" -type f -name sdkmanager | head -n 1 || true)"
-          fi
-
-          if [ -z "$SDKMANAGER" ] || [ ! -f "$SDKMANAGER" ]; then
-            echo "ERROR: SDK Manager not found."
-            find "$SDK_ROOT" -maxdepth 5 -type f -name sdkmanager || true
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$SDK_ROOT" ]; then
+            echo "ERROR: ANDROID_HOME and ANDROID_SDK_ROOT are not set."
             exit 1
           fi
 
@@ -64,54 +65,17 @@ jobs:
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
 
-          - name: Install Android SDK packages
-  shell: bash
-  run: |
-    set -euo pipefail
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null || true
 
-    SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-
-    if [ ! -x "$SDKMANAGER" ]; then
-      echo "ERROR: sdkmanager not found or not executable!"
-      find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f
-      exit 1
-    fi
-
-    yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
-
-    "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
-      "platform-tools" \
-      "platforms;android-36" \
-      "build-tools;36.0.0" \
-      "ndk;23.2.8568313" \
-      "cmake;3.10.2.4988404"
-          "$SDKMANAGER" --version
-
-      # 4. Accept SDK licenses
-      - name: Accept Android SDK Licenses
-        shell: bash
-        run: |
-          set -e
-
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
-
-      # 5. Install Android SDK packages
-      - name: Install Android SDK Packages
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install \
             "platform-tools" \
             "platforms;android-${ANDROID_API}" \
             "build-tools;${BUILD_TOOLS}" \
-            "cmdline-tools;latest" \
             "ndk;${NDK_VERSION}" \
             "cmake;${CMAKE_VERSION}"
 
           echo "Android SDK packages installed."
 
-      # 6. Download Godot
       - name: Download Godot Engine
         shell: bash
         run: |
@@ -120,21 +84,23 @@ jobs:
           BASE="https://github.com/godotengine/godot/releases/download"
           URL="$BASE/${GODOT_VERSION}-${GODOT_RELEASE}/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64.zip"
 
-          wget -q "$URL" -O godot.zip
-
+          curl -L --fail --retry 3 "$URL" -o godot.zip
           mkdir -p godot-bin
           unzip -q godot.zip -d godot-bin
 
           GODOT_BIN="$GITHUB_WORKSPACE/godot-bin/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64"
 
+          if [ ! -f "$GODOT_BIN" ]; then
+            echo "ERROR: Godot executable was not found after extraction."
+            find godot-bin -maxdepth 3 -type f -print
+            exit 1
+          fi
+
           chmod +x "$GODOT_BIN"
-
           echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
-
           "$GODOT_BIN" --version
 
-      # 7. Download Godot export templates
-      - name: Download Godot Export Templates
+      - name: Download and Install Godot Export Templates
         shell: bash
         run: |
           set -euo pipefail
@@ -142,29 +108,34 @@ jobs:
           BASE="https://github.com/godotengine/godot/releases/download"
           URL="$BASE/${GODOT_VERSION}-${GODOT_RELEASE}/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_export_templates.tpz"
 
-          wget -q "$URL" -O templates.tpz
+          curl -L --fail --retry 3 "$URL" -o templates.tpz
 
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}"
+          TEMP_DIR="$RUNNER_TEMP/godot-templates"
 
-          mkdir -p "$TEMPLATE_DIR"
-          unzip -q templates.tpz -d /tmp/godot-templates
+          mkdir -p "$TEMPLATE_DIR" "$TEMP_DIR"
+          unzip -q templates.tpz -d "$TEMP_DIR"
 
-          cp -a /tmp/godot-templates/templates/. "$TEMPLATE_DIR/"
+          if [ ! -d "$TEMP_DIR/templates" ]; then
+            echo "ERROR: The export template archive has no templates directory."
+            find "$TEMP_DIR" -maxdepth 3 -type f -print
+            exit 1
+          fi
+
+          cp -a "$TEMP_DIR/templates/." "$TEMPLATE_DIR/"
 
           test -f "$TEMPLATE_DIR/android_source.zip"
           test -f "$TEMPLATE_DIR/android_debug.apk"
           test -f "$TEMPLATE_DIR/android_release.apk"
 
-          echo "Godot export templates installed."
+          echo "Godot Android export templates installed."
 
-      # 8. Configure Godot Android SDK paths
-      - name: Configure Godot Editor Settings
+      - name: Configure Godot Android SDK Paths
         shell: bash
         run: |
           set -euo pipefail
 
           mkdir -p "$HOME/.config/godot"
-
           SETTINGS="$HOME/.config/godot/editor_settings-4.4.tres"
 
           cat > "$SETTINGS" <<EOF
@@ -175,11 +146,10 @@ jobs:
           export/android/android_sdk_path = "$ANDROID_HOME"
           EOF
 
-          echo "Godot Android paths configured."
+          echo "Godot Android SDK paths configured."
           cat "$SETTINGS"
 
-      # 9. Verify project files and export presets
-      - name: Verify Godot Project
+      - name: Verify Godot Project and Export Presets
         shell: bash
         run: |
           set -euo pipefail
@@ -187,14 +157,12 @@ jobs:
           test -f project.godot
           test -f export_presets.cfg
 
-          grep -q 'name="Android APK"' export_presets.cfg
-          grep -q 'name="Google Play AAB"' export_presets.cfg
+          grep -Fq 'name="Android APK"' export_presets.cfg
+          grep -Fq 'name="Google Play AAB"' export_presets.cfg
+          grep -Fq 'gradle_build/use_gradle_build=true' export_presets.cfg
 
-          grep -q 'gradle_build/use_gradle_build=true' export_presets.cfg
+          echo "Godot project and both Android export presets verified."
 
-          echo "Project and both Android presets verified."
-
-      # 10. Import Godot project
       - name: Import Godot Project
         shell: bash
         run: |
@@ -208,8 +176,7 @@ jobs:
 
           echo "Godot project import completed."
 
-      # 11. Create temporary debug keystore
-      - name: Create Debug Keystore
+      - name: Create Temporary Debug Keystore
         shell: bash
         run: |
           set -euo pipefail
@@ -224,7 +191,6 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-      # 12. Export Android APK
       - name: Export Android Debug APK
         shell: bash
         env:
@@ -243,11 +209,9 @@ jobs:
             build/WORLD_LIFE_3D-debug.apk
 
           test -s build/WORLD_LIFE_3D-debug.apk
+          echo "Android debug APK exported."
 
-          echo "Android APK exported."
-
-      # 13. Configure release signing
-      - name: Configure Release Signing
+      - name: Configure Google Play Release Signing
         shell: bash
         env:
           KEYSTORE_DATA: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -256,32 +220,34 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "$KEYSTORE_DATA" ] || \
-             [ -z "$KEYSTORE_PASSWORD" ] || \
-             [ -z "$KEY_ALIAS" ]; then
+          if [ -z "${KEYSTORE_DATA:-}" ] || \
+             [ -z "${KEYSTORE_PASSWORD:-}" ] || \
+             [ -z "${KEY_ALIAS:-}" ]; then
             echo "ERROR: Release signing secrets are missing."
+            echo "Add ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_ALIAS in GitHub Actions secrets."
             exit 1
           fi
 
           KEYSTORE_PATH="$RUNNER_TEMP/worldlife3d-upload.jks"
-
           printf '%s' "$KEYSTORE_DATA" | base64 --decode > "$KEYSTORE_PATH"
-
           chmod 600 "$KEYSTORE_PATH"
+
+          test -s "$KEYSTORE_PATH"
 
           keytool -list \
             -keystore "$KEYSTORE_PATH" \
             -storepass "$KEYSTORE_PASSWORD" \
             -alias "$KEY_ALIAS" >/dev/null
 
-          echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
-          echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$KEY_ALIAS" >> "$GITHUB_ENV"
-          echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          {
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$KEYSTORE_PATH"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$KEY_ALIAS"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$KEYSTORE_PASSWORD"
+          } >> "$GITHUB_ENV"
 
-          echo "Release signing configured."
+          echo "Google Play release signing configured."
 
-      # 14. Export signed Google Play AAB
-      - name: Export Google Play AAB
+      - name: Export Signed Google Play AAB
         shell: bash
         run: |
           set -euo pipefail
@@ -293,30 +259,31 @@ jobs:
             build/WORLD_LIFE_3D-release.aab
 
           test -s build/WORLD_LIFE_3D-release.aab
+          echo "Signed Google Play AAB exported."
 
-          echo "Google Play AAB exported."
-
-      # 15. Verify APK and AAB
-      - name: Verify Android Builds
+      - name: Verify APK and AAB
         shell: bash
         run: |
           set -euo pipefail
 
-          test -s build/WORLD_LIFE_3D-debug.apk
-          test -s build/WORLD_LIFE_3D-release.aab
+          APK="build/WORLD_LIFE_3D-debug.apk"
+          AAB="build/WORLD_LIFE_3D-release.aab"
+          APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
 
-          echo "Checking APK signature..."
-          apksigner verify build/WORLD_LIFE_3D-debug.apk
+          test -s "$APK"
+          test -s "$AAB"
+          test -x "$APKSIGNER"
 
-          echo "Checking AAB signature..."
-          jarsigner -verify build/WORLD_LIFE_3D-release.aab
+          echo "Verifying APK signature..."
+          "$APKSIGNER" verify --verbose "$APK"
 
-          echo "Both Android files passed basic verification."
+          echo "Verifying AAB signature..."
+          jarsigner -verify "$AAB"
 
+          echo "APK and AAB verification completed."
           ls -lh build/
 
-      # 16. Upload build files
-      - name: Upload Android Releases
+      - name: Upload Android Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: WORLD-LIFE-3D-Android-Releases
