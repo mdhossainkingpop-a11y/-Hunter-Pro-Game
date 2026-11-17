@@ -183,6 +183,49 @@ jobs:
 
           echo "Godot project import completed."
 
+      - name: Install Android Gradle Build Template into Project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}"
+          SOURCE_ZIP="$TEMPLATE_DIR/android_source.zip"
+          PROJECT_ANDROID_DIR="$GITHUB_WORKSPACE/android"
+          GRADLE_TEMPLATE_DIR="$PROJECT_ANDROID_DIR/build"
+
+          if [ ! -s "$SOURCE_ZIP" ]; then
+            echo "ERROR: Godot Android Gradle source template is missing:"
+            echo "$SOURCE_ZIP"
+            exit 1
+          fi
+
+          mkdir -p "$GRADLE_TEMPLATE_DIR"
+
+          echo "Installing Android Gradle template into:"
+          echo "$GRADLE_TEMPLATE_DIR"
+
+          unzip -oq "$SOURCE_ZIP" -d "$GRADLE_TEMPLATE_DIR"
+
+          if [ ! -f "$GRADLE_TEMPLATE_DIR/gradlew" ]; then
+            echo "ERROR: gradlew was not found after extracting android_source.zip."
+            echo "Archive contents:"
+            unzip -Z1 "$SOURCE_ZIP" | head -n 80
+            echo "Extracted files:"
+            find "$PROJECT_ANDROID_DIR" -maxdepth 4 -type f -print || true
+            exit 1
+          fi
+
+          chmod +x "$GRADLE_TEMPLATE_DIR/gradlew"
+
+          if [ ! -d "$GRADLE_TEMPLATE_DIR/app" ]; then
+            echo "ERROR: Android Gradle app directory is missing."
+            find "$GRADLE_TEMPLATE_DIR" -maxdepth 3 -type f -print
+            exit 1
+          fi
+
+          echo "Android Gradle Build Template installed successfully."
+          find "$GRADLE_TEMPLATE_DIR" -maxdepth 2 -type f -print | head -n 60
+
       - name: Create Temporary Debug Keystore
         shell: bash
         run: |
