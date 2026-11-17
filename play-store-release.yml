@@ -1,0 +1,131 @@
+name: WORLD LIFE 3D - Mobile Cloud Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  android-release:
+    name: Build signed APK and Google Play AAB (v1.0.1)
+    runs-on: ubuntu-latest
+    env:
+      GODOT_VERSION: "4.3"
+      GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ runner.temp }}/world-life-3d-upload-key.jks
+      GODOT_ANDROID_KEYSTORE_RELEASE_USER: ${{ secrets.ANDROID_KEY_ALIAS }}
+      GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK packages
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform and build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "cmdline-tools;latest"
+
+      - name: Download Godot 4.3 editor and export templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/godot" "$HOME/.local/share/godot/export_templates/4.3.stable"
+          curl -fL --retry 3 \
+            "https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip" \
+            -o "$RUNNER_TEMP/godot/godot.zip"
+          unzip -q "$RUNNER_TEMP/godot/godot.zip" -d "$RUNNER_TEMP/godot/bin"
+          GODOT_BIN="$(find "$RUNNER_TEMP/godot/bin" -maxdepth 2 -type f \
+            \( -name 'Godot_v*-linux.x86_64' -o -name 'Godot_v*linux.x86_64' \) | head -n 1)"
+          if [ -z "$GODOT_BIN" ]; then
+            GODOT_BIN="$(find "$RUNNER_TEMP/godot/bin" -maxdepth 2 -type f -executable | head -n 1)"
+          fi
+          test -n "$GODOT_BIN"
+          chmod +x "$GODOT_BIN"
+          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
+          curl -fL --retry 3 \
+            "https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz" \
+            -o "$RUNNER_TEMP/godot/export_templates.tpz"
+          mkdir -p "$RUNNER_TEMP/godot/templates"
+          unzip -q "$RUNNER_TEMP/godot/export_templates.tpz" -d "$RUNNER_TEMP/godot/templates"
+          if [ -d "$RUNNER_TEMP/godot/templates/templates" ]; then
+            cp -a "$RUNNER_TEMP/godot/templates/templates/." "$HOME/.local/share/godot/export_templates/4.3.stable/"
+          else
+            cp -a "$RUNNER_TEMP/godot/templates/." "$HOME/.local/share/godot/export_templates/4.3.stable/"
+          fi
+          printf '4.3.stable' > "$HOME/.local/share/godot/export_templates/4.3.stable/version.txt"
+          "$GODOT_BIN" --version
+
+      - name: Validate project and required secrets
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -f project.godot
+          test -f scenes/main.tscn
+          test -f export_presets.cfg
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo "Missing secret ANDROID_KEYSTORE_BASE64"; exit 1; }
+          test -n "$GODOT_ANDROID_KEYSTORE_RELEASE_USER" || { echo "Missing secret ANDROID_KEY_ALIAS"; exit 1; }
+          test -n "$GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD" || { echo "Missing secret ANDROID_KEYSTORE_PASSWORD"; exit 1; }
+          mkdir -p build
+
+      - name: Restore private upload keystore
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$GODOT_ANDROID_KEYSTORE_RELEASE_PATH"
+          chmod 600 "$GODOT_ANDROID_KEYSTORE_RELEASE_PATH"
+          test -s "$GODOT_ANDROID_KEYSTORE_RELEASE_PATH"
+
+      - name: Import and validate Godot project
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GODOT_BIN" --headless --editor --path . --quit
+
+      - name: Export signed release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GODOT_BIN" --headless --path . --export-release "Android APK" build/WORLD_LIFE_3D_v1.0.1_release.apk
+
+      - name: Export signed Google Play AAB
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GODOT_BIN" --headless --path . --export-release "Google Play AAB" build/WORLD_LIFE_3D_v1.0.1_release.aab
+
+      - name: Verify release outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s build/WORLD_LIFE_3D_v1.0.1_release.apk
+          test -s build/WORLD_LIFE_3D_v1.0.1_release.aab
+          file build/WORLD_LIFE_3D_v1.0.1_release.apk build/WORLD_LIFE_3D_v1.0.1_release.aab
+          unzip -t build/WORLD_LIFE_3D_v1.0.1_release.apk >/dev/null
+
+      - name: Upload APK and AAB artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: WORLD-LIFE-3D-v1.0.1-Play-Store-Release
+          path: |
+            build/WORLD_LIFE_3D_v1.0.1_release.apk
+            build/WORLD_LIFE_3D_v1.0.1_release.aab
+          if-no-files-found: error
+          retention-days: 30
