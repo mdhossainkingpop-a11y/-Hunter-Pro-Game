@@ -17,8 +17,8 @@ jobs:
     env:
       GODOT_VERSION: "4.4.1"
       GODOT_RELEASE: "stable"
-      ANDROID_API: "36"
-      BUILD_TOOLS: "36.0.0"
+      ANDROID_API: "34"
+      BUILD_TOOLS: "34.0.0"
       NDK_VERSION: "23.2.8568313"
       CMAKE_VERSION: "3.10.2.4988404"
 
@@ -155,6 +155,35 @@ jobs:
 
           echo "Godot Android SDK paths configured."
           cat "$SETTINGS"
+
+      - name: Set Godot 4.4.1 Compatible Android Target SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Godot 4.4.1's Android export platform defaults to API 34.
+          # Keep both presets at 34 for this compatible build.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("export_presets.cfg")
+          data = path.read_text(encoding="utf-8")
+          data, count = re.subn(
+              r'(?m)^(gradle_build/target_sdk=)"?36"?$',
+              r'\g<1>"34"',
+              data
+          )
+          if count < 2:
+              raise SystemExit(
+                  f"Expected to update both Android presets from target SDK 36; updated {count}. "
+                  "Check export_presets.cfg before continuing."
+              )
+          path.write_text(data, encoding="utf-8")
+          print(f"Updated {count} Android export presets to target SDK 34.")
+          PY
+
+          grep -n 'gradle_build/target_sdk' export_presets.cfg
 
       - name: Verify Godot Project and Export Presets
         shell: bash
