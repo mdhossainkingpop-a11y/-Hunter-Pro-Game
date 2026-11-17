@@ -217,9 +217,13 @@ jobs:
 
           chmod +x "$GRADLE_TEMPLATE_DIR/gradlew"
 
-          if [ ! -d "$GRADLE_TEMPLATE_DIR/app" ]; then
-            echo "ERROR: Android Gradle app directory is missing."
-            find "$GRADLE_TEMPLATE_DIR" -maxdepth 3 -type f -print
+          # Godot's android_source.zip is the contents of the Android app module,
+          # so it is extracted directly into android/build. It does not need
+          # a nested android/build/app directory.
+          if [ ! -f "$GRADLE_TEMPLATE_DIR/settings.gradle" ] || \
+             [ ! -f "$GRADLE_TEMPLATE_DIR/config.gradle" ]; then
+            echo "ERROR: Required Godot Gradle template files are missing."
+            find "$GRADLE_TEMPLATE_DIR" -maxdepth 4 -type f -print
             exit 1
           fi
 
