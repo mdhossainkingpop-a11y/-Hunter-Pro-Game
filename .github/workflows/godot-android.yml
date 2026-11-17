@@ -64,7 +64,27 @@ jobs:
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
 
-          chmod +x "$SDKMANAGER"
+          - name: Install Android SDK packages
+  shell: bash
+  run: |
+    set -euo pipefail
+
+    SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+    if [ ! -x "$SDKMANAGER" ]; then
+      echo "ERROR: sdkmanager not found or not executable!"
+      find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f
+      exit 1
+    fi
+
+    yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
+
+    "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
+      "platform-tools" \
+      "platforms;android-36" \
+      "build-tools;36.0.0" \
+      "ndk;23.2.8568313" \
+      "cmake;3.10.2.4988404"
           "$SDKMANAGER" --version
 
       # 4. Accept SDK licenses
