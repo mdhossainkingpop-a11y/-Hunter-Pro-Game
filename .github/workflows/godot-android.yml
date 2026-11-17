@@ -1,5 +1,5 @@
 
-name: WORLD LIFE 3D - Android Release Build
+name: WORLD LIFE 3D - Android Build
 
 on:
   workflow_dispatch:
@@ -21,20 +21,21 @@ jobs:
       ANDROID_API: "36"
       BUILD_TOOLS: "36.0.0"
       NDK_VERSION: "23.2.8568313"
+      CMAKE_VERSION: "3.10.2.4988404"
 
     steps:
-      # 1. Checkout source code
+      # 1. Download project
       - name: Checkout Repository
         uses: actions/checkout@v5
 
-      # 2. Setup Java
+      # 2. Install Java
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      # 3. Setup Android SDK without obsolete tools package
+      # 3. Check Android SDK
       - name: Configure Android SDK
         shell: bash
         run: |
@@ -50,12 +51,12 @@ jobs:
           SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
 
           if [ ! -f "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" \
-              -type f -name sdkmanager | head -n 1 || true)"
+            SDKMANAGER="$(find "$SDK_ROOT" -type f -name sdkmanager | head -n 1 || true)"
           fi
 
           if [ -z "$SDKMANAGER" ] || [ ! -f "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found."
+            echo "ERROR: SDK Manager not found."
+            find "$SDK_ROOT" -maxdepth 5 -type f -name sdkmanager || true
             exit 1
           fi
 
@@ -63,36 +64,40 @@ jobs:
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
 
+          chmod +x "$SDKMANAGER"
           "$SDKMANAGER" --version
 
-      # 4. Accept licenses
+      # 4. Accept SDK licenses
       - name: Accept Android SDK Licenses
         shell: bash
         run: |
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          set -e
 
-      # 5. Install required Android SDK packages
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
+
+      # 5. Install Android SDK packages
       - name: Install Android SDK Packages
         shell: bash
         run: |
           set -euo pipefail
 
-          "$SDKMANAGER" --install \
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
             "platform-tools" \
             "platforms;android-${ANDROID_API}" \
             "build-tools;${BUILD_TOOLS}" \
-            "ndk;${NDK_VERSION}"
+            "cmdline-tools;latest" \
+            "ndk;${NDK_VERSION}" \
+            "cmake;${CMAKE_VERSION}"
 
-          echo "Android SDK installation completed."
+          echo "Android SDK packages installed."
 
-      # 6. Download Godot 4.4.1
+      # 6. Download Godot
       - name: Download Godot Engine
         shell: bash
         run: |
           set -euo pipefail
 
           BASE="https://github.com/godotengine/godot/releases/download"
-
           URL="$BASE/${GODOT_VERSION}-${GODOT_RELEASE}/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64.zip"
 
           wget -q "$URL" -O godot.zip
@@ -108,259 +113,72 @@ jobs:
 
           "$GODOT_BIN" --version
 
-      # 7. Download matching Godot export templates
+      # 7. Download Godot export templates
       - name: Download Godot Export Templates
         shell: bash
         run: |
           set -euo pipefail
 
           BASE="https://github.com/godotengine/godot/releases/download"
-
           URL="$BASE/${GODOT_VERSION}-${GODOT_RELEASE}/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_export_templates.tpz"
 
           wget -q "$URL" -O templates.tpz
 
-          mkdir -p /tmp/godot-templates
-
-          unzip -q templates.tpz -d /tmp/godot-templates
-
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}"
 
           mkdir -p "$TEMPLATE_DIR"
+          unzip -q templates.tpz -d /tmp/godot-templates
 
           cp -a /tmp/godot-templates/templates/. "$TEMPLATE_DIR/"
 
           test -f "$TEMPLATE_DIR/android_source.zip"
+          test -f "$TEMPLATE_DIR/android_debug.apk"
+          test -f "$TEMPLATE_DIR/android_release.apk"
 
-          jobs:
-  build:
-    runs-on: ubuntu-latest
+          echo "Godot export templates installed."
 
-    steps:
-      # আগের ধাপগুলো থাকবে
-
-      - name: Verify Android SDK Manager
-        shell: bash
-        run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-
-          if [ ! -f "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found!"
-            find "$ANDROID_HOME" -name sdkmanager -type f
-            exit 1
-          fi
-
-          chmod +x "$SDKMANAGER"
-          "$SDKMANAGER" --version
-
-
-
-
-      # 8. Install Android Gradle template
-      - name: Install Android Gradle Template
+      # 8. Configure Godot Android SDK paths
+      - name: Configure Godot Editor Settings
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p android/build
+          mkdir -p "$HOME/.config/godot"
 
-          unzip -q -o \
-            "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}/android_source.zip" \
-            -d android/build
+          SETTINGS="$HOME/.config/godot/editor_settings-4.4.tres"
 
-          test -f android/build/app/config.gradle
-          test -f android/build/gradlew
-          test -f android/build/gradle/wrapper/gradle-wrapper.properties
+          cat > "$SETTINGS" <<EOF
+          [gd_resource type="EditorSettings" format=3]
 
-          chmod +x android/build/gradlew
+          [resource]
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          EOF
 
-      # 9. Upgrade Gradle template for Android API 36
-      - name: Configure Gradle for Android API 36
-        shell: bash
-        run: |
-          set -euo pipefail
+          echo "Godot Android paths configured."
+          cat "$SETTINGS"
 
-          CONFIG="android/build/app/config.gradle"
-          WRAPPER="android/build/gradle/wrapper/gradle-wrapper.properties"
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("android/build/app/config.gradle")
-          text = path.read_text()
-
-          replacements = {
-              "androidGradlePlugin": "8.9.1",
-              "compileSdk": "36",
-              "targetSdk": "36",
-              "buildTools": "36.0.0",
-          }
-
-          for key, value in replacements.items():
-              pattern = (
-                  r"(\b" + re.escape(key) +
-                  r"\s*:\s*)['\"][^'\"]*['\"]"
-                  if key in ("androidGradlePlugin", "buildTools")
-                  else r"(\b" + re.escape(key) +
-                  r"\s*:\s*)\d+"
-              )
-
-              text, count = re.subn(
-                  pattern,
-                  lambda m: m.group(1) + (
-                      f"'{value}'" if key in
-                      ("androidGradlePlugin", "buildTools")
-                      else value
-                  ),
-                  text,
-                  count=1
-              )
-
-              if count != 1:
-                  raise SystemExit(
-                      f"Could not update Gradle setting: {key}"
-                  )
-
-          path.write_text(text)
-
-          wrapper = Path(
-              "android/build/gradle/wrapper/gradle-wrapper.properties"
-          )
-
-          text = wrapper.read_text()
-
-          text, count = re.subn(
-              r"distributionUrl=.*",
-              "distributionUrl=https\\\\://services.gradle.org/distributions/gradle-8.11.1-bin.zip",
-              text,
-              count=1
-          )
-
-          if count != 1:
-              raise SystemExit("Gradle wrapper URL not found")
-
-          wrapper.write_text(text)
-
-          print("Gradle configured for Android API 36.")
-          PY
-
-          grep -E "androidGradlePlugin|compileSdk|targetSdk|buildTools" "$CONFIG"
-
-      # 10. Verify project files
+      # 9. Verify project files and export presets
       - name: Verify Godot Project
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           test -f project.godot
           test -f export_presets.cfg
-          test -f android/build/app/config.gradle
 
-          echo "Godot project verified."
+          grep -q 'name="Android APK"' export_presets.cfg
+          grep -q 'name="Google Play AAB"' export_presets.cfg
 
-      # 11. Configure Android export preset
-      - name: Configure Godot Android Preset
-        shell: bash
-        run: |
-          set -euo pipefail
+          grep -q 'gradle_build/use_gradle_build=true' export_presets.cfg
 
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
+          echo "Project and both Android presets verified."
 
-          path = Path("export_presets.cfg")
-          lines = path.read_text().splitlines()
-
-          preset_index = None
-
-          for i, line in enumerate(lines):
-              match = re.fullmatch(
-                  r"\[preset\.(\d+)\]",
-                  line.strip()
-              )
-
-              if not match:
-                  continue
-
-              j = i + 1
-
-              while j < len(lines) and not lines[j].startswith("["):
-                  if re.fullmatch(
-                      r'\s*name\s*=\s*"Android"\s*',
-                      lines[j]
-                  ):
-                      preset_index = match.group(1)
-                      break
-                  j += 1
-
-              if preset_index is not None:
-                  break
-
-          if preset_index is None:
-              raise SystemExit("Android export preset not found")
-
-          section = f"[preset.{preset_index}.options]"
-
-          start = None
-          end = len(lines)
-
-          for i, line in enumerate(lines):
-              if line.strip() == section:
-                  start = i
-
-                  for j in range(i + 1, len(lines)):
-                      if lines[j].startswith("["):
-                          end = j
-                          break
-                  break
-
-          if start is None:
-              raise SystemExit(
-                  "Android export options section missing"
-              )
-
-          settings = {
-              "gradle_build/use_gradle_build": "true",
-              "gradle_build/gradle_build_directory": '"res://android/build"',
-              "gradle_build/export_format": "0",
-              "gradle_build/min_sdk": '"23"',
-              "gradle_build/target_sdk": '"36"',
-              "architectures/arm64-v8a": "true",
-              "architectures/armeabi-v7a": "false",
-              "package/signed": "true",
-          }
-
-          for key, value in settings.items():
-              pattern = re.compile(
-                  r"^\s*" + re.escape(key) + r"\s*="
-              )
-
-              found = False
-
-              for i in range(start + 1, end):
-                  if pattern.match(lines[i]):
-                      lines[i] = f"{key}={value}"
-                      found = True
-                      break
-
-              if not found:
-                  lines.insert(end, f"{key}={value}")
-                  end += 1
-
-          path.write_text("\n".join(lines) + "\n")
-
-          print("Android preset configured.")
-          PY
-
-      # 12. Import project
+      # 10. Import Godot project
       - name: Import Godot Project
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           "$GODOT_BIN" \
             --headless \
@@ -368,11 +186,13 @@ jobs:
             --path "$GITHUB_WORKSPACE" \
             --import
 
-      # 13. Create debug keystore
+          echo "Godot project import completed."
+
+      # 11. Create temporary debug keystore
       - name: Create Debug Keystore
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           keytool -genkeypair \
             -keystore "$RUNNER_TEMP/debug.keystore" \
@@ -384,8 +204,8 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-      # 14. Export Debug APK
-      - name: Export Debug APK
+      # 12. Export Android APK
+      - name: Export Android Debug APK
         shell: bash
         env:
           GODOT_ANDROID_KEYSTORE_DEBUG_PATH: ${{ runner.temp }}/debug.keystore
@@ -399,14 +219,14 @@ jobs:
           "$GODOT_BIN" \
             --headless \
             --path "$GITHUB_WORKSPACE" \
-            --export-debug "Android" \
+            --export-debug "Android APK" \
             build/WORLD_LIFE_3D-debug.apk
 
           test -s build/WORLD_LIFE_3D-debug.apk
 
-          echo "Debug APK generated."
+          echo "Android APK exported."
 
-      # 15. Configure release signing
+      # 13. Configure release signing
       - name: Configure Release Signing
         shell: bash
         env:
@@ -419,21 +239,20 @@ jobs:
           if [ -z "$KEYSTORE_DATA" ] || \
              [ -z "$KEYSTORE_PASSWORD" ] || \
              [ -z "$KEY_ALIAS" ]; then
-            echo "ERROR: Missing GitHub signing secrets."
+            echo "ERROR: Release signing secrets are missing."
             exit 1
           fi
 
           KEYSTORE_PATH="$RUNNER_TEMP/worldlife3d-upload.jks"
 
-          printf '%s' "$KEYSTORE_DATA" | \
-            base64 --decode > "$KEYSTORE_PATH"
+          printf '%s' "$KEYSTORE_DATA" | base64 --decode > "$KEYSTORE_PATH"
+
+          chmod 600 "$KEYSTORE_PATH"
 
           keytool -list \
             -keystore "$KEYSTORE_PATH" \
             -storepass "$KEYSTORE_PASSWORD" \
             -alias "$KEY_ALIAS" >/dev/null
-
-          chmod 600 "$KEYSTORE_PATH"
 
           echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
           echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$KEY_ALIAS" >> "$GITHUB_ENV"
@@ -441,75 +260,8 @@ jobs:
 
           echo "Release signing configured."
 
-      # 16. Switch export format to AAB
-      - name: Configure AAB Export
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("export_presets.cfg")
-          lines = path.read_text().splitlines()
-
-          preset_index = None
-
-          for i, line in enumerate(lines):
-              match = re.fullmatch(
-                  r"\[preset\.(\d+)\]",
-                  line.strip()
-              )
-
-              if not match:
-                  continue
-
-              j = i + 1
-
-              while j < len(lines) and not lines[j].startswith("["):
-                  if re.fullmatch(
-                      r'\s*name\s*=\s*"Android"\s*',
-                      lines[j]
-                  ):
-                      preset_index = match.group(1)
-                      break
-                  j += 1
-
-              if preset_index is not None:
-                  break
-
-          if preset_index is None:
-              raise SystemExit("Android preset missing")
-
-          section = f"[preset.{preset_index}.options]"
-
-          for i, line in enumerate(lines):
-              if line.strip() == section:
-                  for j in range(i + 1, len(lines)):
-                      if lines[j].startswith("["):
-                          break
-
-                      if re.match(
-                          r"^\s*gradle_build/export_format\s*=",
-                          lines[j]
-                      ):
-                          lines[j] = "gradle_build/export_format=1"
-                          break
-                  else:
-                      lines.insert(i + 1, "gradle_build/export_format=1")
-
-                  break
-          else:
-              raise SystemExit("Android options section missing")
-
-          path.write_text("\n".join(lines) + "\n")
-
-          print("AAB format enabled.")
-          PY
-
-      # 17. Export signed Play Store AAB
-      - name: Export Signed Play Store AAB
+      # 14. Export signed Google Play AAB
+      - name: Export Google Play AAB
         shell: bash
         run: |
           set -euo pipefail
@@ -517,15 +269,15 @@ jobs:
           "$GODOT_BIN" \
             --headless \
             --path "$GITHUB_WORKSPACE" \
-            --export-release "Android" \
+            --export-release "Google Play AAB" \
             build/WORLD_LIFE_3D-release.aab
 
           test -s build/WORLD_LIFE_3D-release.aab
 
-          echo "Release AAB generated."
+          echo "Google Play AAB exported."
 
-      # 18. Verify APK and AAB
-      - name: Verify Build Outputs
+      # 15. Verify APK and AAB
+      - name: Verify Android Builds
         shell: bash
         run: |
           set -euo pipefail
@@ -534,22 +286,18 @@ jobs:
           test -s build/WORLD_LIFE_3D-release.aab
 
           echo "Checking APK signature..."
-
-          apksigner verify \
-            build/WORLD_LIFE_3D-debug.apk
+          apksigner verify build/WORLD_LIFE_3D-debug.apk
 
           echo "Checking AAB signature..."
+          jarsigner -verify build/WORLD_LIFE_3D-release.aab
 
-          jarsigner -verify \
-            build/WORLD_LIFE_3D-release.aab
-
-          echo "Build verification completed."
+          echo "Both Android files passed basic verification."
 
           ls -lh build/
 
-      # 19. Upload APK and AAB
+      # 16. Upload build files
       - name: Upload Android Releases
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: WORLD-LIFE-3D-Android-Releases
           path: |
