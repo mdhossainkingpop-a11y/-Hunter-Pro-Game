@@ -20,56 +20,113 @@ jobs:
       GODOT_RELEASE: "stable"
 
     steps:
+      # 1. Download project source
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
+      # 2. Install Java 17
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK Packages
+      # 3. Configure Android SDK
+      - name: Configure Android SDK
+        shell: bash
         run: |
-          sdkmanager --install \
+          set -e
+
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -f "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" \
+              -type f -name sdkmanager | head -n 1)"
+          fi
+
+          if [ -z "$SDKMANAGER" ] || [ ! -f "$SDKMANAGER" ]; then
+            echo "ERROR: Android SDK Manager not found!"
+            exit 1
+          fi
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+
+          echo "Android SDK found:"
+          "$SDKMANAGER" --version
+
+      # 4. Accept Android licenses
+      - name: Accept Android SDK Licenses
+        shell: bash
+        run: |
+          set -e
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+
+      # 5. Install Android packages
+      - name: Install Android SDK Packages
+        shell: bash
+        run: |
+          set -e
+
+          "$SDKMANAGER" --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0" \
-            "cmdline-tools;latest" \
             "ndk;28.1.13356709" \
             "cmake;3.22.1"
 
+      # 6. Download Godot
       - name: Download Godot Engine
+        shell: bash
         run: |
-          wget -q \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_RELEASE}/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64.zip" \
-            -O godot.zip
+          set -e
 
+          URL="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_RELEASE}/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64.zip"
+
+          wget -q "$URL" -O godot.zip
+
+          mkdir -p godot-bin
           unzip -q godot.zip -d godot-bin
-          chmod +x godot-bin/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64
 
-          echo "$GITHUB_WORKSPACE/godot-bin" >> "$GITHUB_PATH"
-          echo "GODOT_BIN=$GITHUB_WORKSPACE/godot-bin/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64" >> "$GITHUB_ENV"
+          GODOT_BIN="$GITHUB_WORKSPACE/godot-bin/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64"
 
+          chmod +x "$GODOT_BIN"
+
+          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
+
+          "$GODOT_BIN" --version
+
+      # 7. Install Godot Export Templates
       - name: Install Godot Export Templates
+        shell: bash
         run: |
-          wget -q \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_RELEASE}/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_export_templates.tpz" \
-            -O templates.tpz
+          set -e
+
+          URL="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_RELEASE}/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_export_templates.tpz"
+
+          wget -q "$URL" -O templates.tpz
 
           mkdir -p /tmp/godot-templates
           unzip -q templates.tpz -d /tmp/godot-templates
 
-          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}"
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}"
 
-          cp -a /tmp/godot-templates/templates/. \
-            "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}/"
+          mkdir -p "$TEMPLATE_DIR"
 
-      - name: Configure Godot Android SDK
+          cp -a /tmp/godot-templates/templates/. "$TEMPLATE_DIR/"
+
+      # 8. Configure Godot Android paths
+      - name: Configure Godot Android
+        shell: bash
         run: |
+          set -e
+
           mkdir -p "$HOME/.config/godot"
 
           cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
@@ -80,36 +137,68 @@ jobs:
           export/android/java_sdk_path = "$JAVA_HOME"
           EOF
 
-      - name: Verify Project
+      # 9. Verify project
+      - name: Verify Godot Project
+        shell: bash
         run: |
-          test -f project.godot || {
-            echo "ERROR: project.godot not found!"
-            exit 1
-          }
+          set -e
 
-          test -f export_presets.cfg || {
-            echo "ERROR: export_presets.cfg not found!"
+          if [ ! -f project.godot ]; then
+            echo "ERROR: project.godot missing!"
             exit 1
-          }
+          fi
 
+          if [ ! -f export_presets.cfg ]; then
+            echo "ERROR: export_presets.cfg missing!"
+            exit 1
+          fi
+
+          echo "Godot project found."
+
+          if ! grep -q 'name="Android"' export_presets.cfg; then
+            echo "ERROR: Android export preset not found!"
+            exit 1
+          fi
+
+          echo "Android preset found."
+
+      # 10. Import project
       - name: Import Godot Project
+        shell: bash
         run: |
-          "$GODOT_BIN" --headless --editor --path . --import
+          set -e
 
+          "$GODOT_BIN" \
+            --headless \
+            --editor \
+            --path "$GITHUB_WORKSPACE" \
+            --import
+
+      # 11. Export APK
       - name: Export Android APK
+        shell: bash
         run: |
+          set -e
+
           mkdir -p build
 
           "$GODOT_BIN" \
             --headless \
-            --path . \
+            --path "$GITHUB_WORKSPACE" \
             --export-debug "Android" \
             build/WORLD_LIFE_3D.apk
 
-          test -s build/WORLD_LIFE_3D.apk
+          if [ ! -s build/WORLD_LIFE_3D.apk ]; then
+            echo "ERROR: APK was not generated!"
+            exit 1
+          fi
 
+          echo "APK successfully generated!"
+          ls -lh build/WORLD_LIFE_3D.apk
+
+      # 12. Upload APK
       - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: WORLD-LIFE-3D-Android-APK
           path: build/WORLD_LIFE_3D.apk
