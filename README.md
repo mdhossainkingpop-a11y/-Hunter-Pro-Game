@@ -1,2 +1,2 @@
-# -Hunter-Pro-Game
-This is a hunter game project 
+# -wild-life-Hunter-Pro-Game
+This is a wildlife hunter game project 
