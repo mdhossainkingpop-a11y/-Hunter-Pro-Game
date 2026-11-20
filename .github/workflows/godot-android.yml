@@ -108,17 +108,18 @@ jobs:
           "$GODOT_BIN" --version
 
 
+
       - name: Download and Install Godot Export Templates
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Downloading Godot Android Export Templates..."
+          echo "Downloading Godot ${GODOT_VERSION} export templates..."
 
           BASE="https://github.com/godotengine/godot/releases/download"
           URL="$BASE/${GODOT_VERSION}-${GODOT_RELEASE}/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_export_templates.tpz"
 
-          curl -fL --retry 3 --retry-delay 2 "$URL" -o templates.tpz
+          curl -L --fail --retry 3 "$URL" -o templates.tpz
 
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}"
           TEMP_DIR="$RUNNER_TEMP/godot-templates"
@@ -129,47 +130,55 @@ jobs:
           echo "Extracting export templates..."
           unzip -q templates.tpz -d "$TEMP_DIR"
 
-          # Verify extracted template directory
-          if [ ! -d "$TEMP_DIR/templates" ]; then
-            echo "ERROR: Templates directory is missing."
-            echo "Archive contents:"
-            unzip -Z1 templates.tpz | head -n 80
-            exit 1
-          fi
+          # Correct archive structure:
+          # templates/version.txt
+          SOURCE_DIR="$TEMP_DIR/templates"
+          VERSION_FILE="$SOURCE_DIR/version.txt"
 
-          # Verify version information
-          if [ ! -s "$TEMP_DIR/version.txt" ]; then
-            echo "ERROR: version.txt is missing or empty."
-            echo "Extracted contents:"
+          if [ ! -d "$SOURCE_DIR" ]; then
+            echo "ERROR: templates directory is missing."
             find "$TEMP_DIR" -maxdepth 3 -type f -print
             exit 1
           fi
 
-          echo "Export template version:"
-          cat "$TEMP_DIR/version.txt"
-
-          if ! grep -q "^${GODOT_VERSION}.${GODOT_RELEASE}" "$TEMP_DIR/version.txt"; then
-            echo "ERROR: Export template version does not match Godot ${GODOT_VERSION}.${GODOT_RELEASE}."
+          if [ ! -s "$VERSION_FILE" ]; then
+            echo "ERROR: templates/version.txt is missing or empty."
+            find "$TEMP_DIR" -maxdepth 3 -type f -print
             exit 1
           fi
 
-          # Install all export templates
-          cp -a "$TEMP_DIR/templates/." "$TEMPLATE_DIR/"
+          TEMPLATE_VERSION="$(head -n 1 "$VERSION_FILE" | tr -d '\r')"
 
-          # Install version.txt in the required location
-          cp "$TEMP_DIR/version.txt" "$TEMPLATE_DIR/version.txt"
+          echo "Detected template version: $TEMPLATE_VERSION"
+
+          case "$TEMPLATE_VERSION" in
+            4.4.1.stable*)
+              echo "Godot template version matches."
+              ;;
+            *)
+              echo "ERROR: Expected Godot 4.4.1.stable."
+              echo "Found: $TEMPLATE_VERSION"
+              exit 1
+              ;;
+          esac
+
+          echo "Installing templates..."
+          cp -a "$SOURCE_DIR/." "$TEMPLATE_DIR/"
 
           echo "Verifying installed Android templates..."
 
-          test -s "$TEMPLATE_DIR/version.txt"
-          test -s "$TEMPLATE_DIR/android_source.zip"
-          test -s "$TEMPLATE_DIR/android_debug.apk"
-          test -s "$TEMPLATE_DIR/android_release.apk"
+          for FILE in version.txt android_source.zip android_debug.apk android_release.apk; do
+            if [ ! -s "$TEMPLATE_DIR/$FILE" ]; then
+              echo "ERROR: Required template file missing: $FILE"
+              exit 1
+            fi
+            echo "OK: $FILE"
+          done
 
-          echo "Installed template files:"
-          ls -lh "$TEMPLATE_DIR"
+          echo "Installed template version:"
+          cat "$TEMPLATE_DIR/version.txt"
 
-          echo "Godot ${GODOT_VERSION}.${GODOT_RELEASE} export templates installed successfully."
+          echo "Godot Android export templates installed successfully."
 
 
       - name: Configure Godot Android SDK Paths
