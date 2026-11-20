@@ -107,35 +107,70 @@ jobs:
           echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
           "$GODOT_BIN" --version
 
+
       - name: Download and Install Godot Export Templates
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "Downloading Godot Android Export Templates..."
+
           BASE="https://github.com/godotengine/godot/releases/download"
           URL="$BASE/${GODOT_VERSION}-${GODOT_RELEASE}/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_export_templates.tpz"
 
-          curl -L --fail --retry 3 "$URL" -o templates.tpz
+          curl -fL --retry 3 --retry-delay 2 "$URL" -o templates.tpz
 
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}"
           TEMP_DIR="$RUNNER_TEMP/godot-templates"
 
-          mkdir -p "$TEMPLATE_DIR" "$TEMP_DIR"
+          rm -rf "$TEMP_DIR"
+          mkdir -p "$TEMP_DIR" "$TEMPLATE_DIR"
+
+          echo "Extracting export templates..."
           unzip -q templates.tpz -d "$TEMP_DIR"
 
+          # Verify extracted template directory
           if [ ! -d "$TEMP_DIR/templates" ]; then
-            echo "ERROR: Export template archive has no templates directory."
+            echo "ERROR: Templates directory is missing."
+            echo "Archive contents:"
+            unzip -Z1 templates.tpz | head -n 80
+            exit 1
+          fi
+
+          # Verify version information
+          if [ ! -s "$TEMP_DIR/version.txt" ]; then
+            echo "ERROR: version.txt is missing or empty."
+            echo "Extracted contents:"
             find "$TEMP_DIR" -maxdepth 3 -type f -print
             exit 1
           fi
 
+          echo "Export template version:"
+          cat "$TEMP_DIR/version.txt"
+
+          if ! grep -q "^${GODOT_VERSION}.${GODOT_RELEASE}" "$TEMP_DIR/version.txt"; then
+            echo "ERROR: Export template version does not match Godot ${GODOT_VERSION}.${GODOT_RELEASE}."
+            exit 1
+          fi
+
+          # Install all export templates
           cp -a "$TEMP_DIR/templates/." "$TEMPLATE_DIR/"
 
-          test -f "$TEMPLATE_DIR/android_source.zip"
-          test -f "$TEMPLATE_DIR/android_debug.apk"
-          test -f "$TEMPLATE_DIR/android_release.apk"
+          # Install version.txt in the required location
+          cp "$TEMP_DIR/version.txt" "$TEMPLATE_DIR/version.txt"
 
-          echo "Godot Android export templates installed."
+          echo "Verifying installed Android templates..."
+
+          test -s "$TEMPLATE_DIR/version.txt"
+          test -s "$TEMPLATE_DIR/android_source.zip"
+          test -s "$TEMPLATE_DIR/android_debug.apk"
+          test -s "$TEMPLATE_DIR/android_release.apk"
+
+          echo "Installed template files:"
+          ls -lh "$TEMPLATE_DIR"
+
+          echo "Godot ${GODOT_VERSION}.${GODOT_RELEASE} export templates installed successfully."
+
 
       - name: Configure Godot Android SDK Paths
         shell: bash
