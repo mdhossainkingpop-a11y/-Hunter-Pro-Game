@@ -254,6 +254,51 @@ jobs:
 
           echo "Godot project and both Android export presets verified."
 
+      
+      - name: Create and Configure Project Icon
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > icon.svg <<'SVG'
+          <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="90" fill="#173D2B"/>
+            <circle cx="256" cy="256" r="180" fill="#2E7547"/>
+            <path d="M256 100 L300 210 L410 256 L300 302 L256 412 L212 302 L102 256 L212 210 Z" fill="#D8F0A8"/>
+            <circle cx="256" cy="256" r="55" fill="#173D2B"/>
+          </svg>
+          SVG
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("project.godot")
+          data = path.read_text(encoding="utf-8")
+
+          if not re.search(r'(?m)^config/icon\s*=', data):
+              match = re.search(r'(?m)^\[application\]\s*$', data)
+              if match:
+                  pos = match.end()
+                  data = data[:pos] + '\nconfig/icon="res://icon.svg"' + data[pos:]
+              else:
+                  data += '\n\n[application]\nconfig/icon="res://icon.svg"\n'
+          else:
+              data = re.sub(
+                  r'(?m)^config/icon\s*=.*$',
+                  'config/icon="res://icon.svg"',
+                  data
+              )
+
+          path.write_text(data, encoding="utf-8")
+          print("Project icon configured successfully.")
+          PY
+
+          grep -n 'config/icon' project.godot
+          test -s icon.svg
+          
+      
+      
       - name: Import Godot Project
         shell: bash
         run: |
@@ -267,52 +312,67 @@ jobs:
 
           echo "Godot project import completed."
 
+      
       - name: Install Android Gradle Build Template into Project
         shell: bash
         run: |
           set -euo pipefail
 
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}"
+          PROJECT_ANDROID="$GITHUB_WORKSPACE/android"
+          BUILD_DIR="$PROJECT_ANDROID/build"
           SOURCE_ZIP="$TEMPLATE_DIR/android_source.zip"
-          PROJECT_ANDROID_DIR="$GITHUB_WORKSPACE/android"
-          GRADLE_TEMPLATE_DIR="$PROJECT_ANDROID_DIR/build"
 
-          if [ ! -s "$SOURCE_ZIP" ]; then
-            echo "ERROR: Godot Android Gradle source template is missing:"
-            echo "$SOURCE_ZIP"
+          echo "Checking Android source template..."
+
+          test -s "$SOURCE_ZIP"
+          test -s "$TEMPLATE_DIR/version.txt"
+
+          TEMPLATE_VERSION="$(head -n 1 "$TEMPLATE_DIR/version.txt" | tr -d '\r')"
+
+          if [ "$TEMPLATE_VERSION" != "4.4.1.stable" ]; then
+            echo "ERROR: Incorrect template version: $TEMPLATE_VERSION"
             exit 1
           fi
 
-          mkdir -p "$GRADLE_TEMPLATE_DIR"
+          echo "Installing Godot Android Gradle template..."
 
-          echo "Installing Android Gradle template into:"
-          echo "$GRADLE_TEMPLATE_DIR"
+          mkdir -p "$PROJECT_ANDROID/plugins"
+          mkdir -p "$BUILD_DIR"
 
-          unzip -oq "$SOURCE_ZIP" -d "$GRADLE_TEMPLATE_DIR"
+          # Required Godot project template version metadata.
+          printf '%s\n' "$TEMPLATE_VERSION" > "$PROJECT_ANDROID/.build_version"
 
-          if [ ! -f "$GRADLE_TEMPLATE_DIR/gradlew" ]; then
-            echo "ERROR: gradlew was not found after extracting android_source.zip."
-            echo "Archive contents:"
-            unzip -Z1 "$SOURCE_ZIP" | head -n 80
-            echo "Extracted files:"
-            find "$PROJECT_ANDROID_DIR" -maxdepth 4 -type f -print || true
-            exit 1
-          fi
+          # Extract the official Android Gradle source template.
+          unzip -oq "$SOURCE_ZIP" -d "$BUILD_DIR"
 
-          chmod +x "$GRADLE_TEMPLATE_DIR/gradlew"
+          # Mark Android build folder as Godot-ignored.
+          touch "$BUILD_DIR/.gdignore"
 
-          # Godot's android_source.zip is the contents of the Android app module,
-          # so it is extracted directly into android/build. It does not need
-          # a nested android/build/app directory.
-          if [ ! -f "$GRADLE_TEMPLATE_DIR/settings.gradle" ] || \
-             [ ! -f "$GRADLE_TEMPLATE_DIR/config.gradle" ]; then
-            echo "ERROR: Required Godot Gradle template files are missing."
-            find "$GRADLE_TEMPLATE_DIR" -maxdepth 4 -type f -print
-            exit 1
-          fi
+          # Make Gradle wrapper executable.
+          test -f "$BUILD_DIR/gradlew"
+          chmod +x "$BUILD_DIR/gradlew"
 
-          echo "Android Gradle Build Template installed successfully."
-          find "$GRADLE_TEMPLATE_DIR" -maxdepth 2 -type f -print | head -n 60
+          # Verify required files.
+          for FILE in \
+            settings.gradle \
+            build.gradle \
+            config.gradle \
+            gradlew \
+            gradle/wrapper/gradle-wrapper.properties
+          do
+            if [ ! -s "$BUILD_DIR/$FILE" ]; then
+              echo "ERROR: Missing Gradle file: $FILE"
+              exit 1
+            fi
+            echo "OK: $FILE"
+          done
+
+          echo "Installed project build version:"
+          cat "$PROJECT_ANDROID/.build_version"
+
+          echo "Godot Android Gradle template installation successful."
+
 
       - name: Create Temporary Debug Keystore
         shell: bash
