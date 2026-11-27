@@ -409,7 +409,7 @@ jobs:
           test -s build/WORLD_LIFE_3D-debug.apk
           echo "Android debug APK exported."
 
-            - name: Configure Google Play Release Signing
+      - name: Configure Google Play Release Signing
         shell: bash
         env:
           KEYSTORE_DATA: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
