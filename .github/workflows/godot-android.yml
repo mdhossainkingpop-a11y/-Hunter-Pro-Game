@@ -409,6 +409,7 @@ jobs:
           test -s build/WORLD_LIFE_3D-debug.apk
           echo "Android debug APK exported."
 
+      
       - name: Configure Google Play Release Signing
         shell: bash
         env:
@@ -418,71 +419,59 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "${KEYSTORE_DATA:-}" ]; then
-            echo "ERROR: ANDROID_KEYSTORE_BASE64 is missing."
-            exit 1
-          fi
-
-          if [ -z "${KEYSTORE_PASSWORD:-}" ]; then
-            echo "ERROR: ANDROID_KEYSTORE_PASSWORD is missing."
-            exit 1
-          fi
-
-          if [ -z "${KEY_ALIAS:-}" ]; then
-            echo "ERROR: ANDROID_KEY_ALIAS is missing."
+          if [ -z "${KEYSTORE_DATA:-}" ] || \
+             [ -z "${KEYSTORE_PASSWORD:-}" ] || \
+             [ -z "${KEY_ALIAS:-}" ]; then
+            echo "ERROR: Required GitHub Secrets are missing."
             exit 1
           fi
 
           KEYSTORE_PATH="$RUNNER_TEMP/worldlife3d-upload.jks"
 
-          python3 - <<'PY'
-          import os
-          import re
-          import base64
-          import sys
-
-          encoded = os.environ["KEYSTORE_DATA"]
-          encoded = re.sub(r"\s+", "", encoded)
-
-          try:
-              decoded = base64.b64decode(encoded, validate=True)
-          except Exception as error:
-              print("ERROR: Invalid Base64 keystore data.")
-              print(type(error).__name__)
-              sys.exit(1)
-
-          if not decoded:
-              print("ERROR: Decoded keystore is empty.")
-              sys.exit(1)
-
-          output = os.environ["RUNNER_TEMP"] + "/worldlife3d-upload.jks"
-
-          with open(output, "wb") as file:
-              file.write(decoded)
-
-          print("Keystore Base64 decoding completed.")
-          PY
+          printf '%s' "$KEYSTORE_DATA" |
+            tr -d '\r\n ' |
+            base64 --decode > "$KEYSTORE_PATH"
 
           chmod 600 "$KEYSTORE_PATH"
-
           test -s "$KEYSTORE_PATH"
+
+          echo "Checking keystore and alias..."
 
           keytool -list \
             -keystore "$KEYSTORE_PATH" \
             -storepass "$KEYSTORE_PASSWORD" \
             -alias "$KEY_ALIAS"
 
-          {
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$KEYSTORE_PATH"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$KEY_ALIAS"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$KEYSTORE_PASSWORD"
-          } >> "$GITHUB_ENV"
+          echo "Checking private key password..."
 
-          echo "Google Play release signing configured successfully."
+          keytool -certreq \
+            -alias "$KEY_ALIAS" \
+            -keystore "$KEYSTORE_PATH" \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -keypass "$KEYSTORE_PASSWORD" \
+            -file "$RUNNER_TEMP/worldlife3d-check.csr"
+
+          test -s "$RUNNER_TEMP/worldlife3d-check.csr"
+
+          echo "Keystore, alias and private key password verified."
+
+          
+      
       - name: Export Signed Google Play AAB
         shell: bash
+        env:
+          GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ runner.temp }}/worldlife3d-upload.jks
+          GODOT_ANDROID_KEYSTORE_RELEASE_USER: ${{ secrets.ANDROID_KEY_ALIAS }}
+          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
+
+          mkdir -p build
+
+          test -s "$GODOT_ANDROID_KEYSTORE_RELEASE_PATH"
+
+          test -n "$GODOT_ANDROID_KEYSTORE_RELEASE_USER"
+          test -n "$GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD"
 
           "$GODOT_BIN" \
             --headless \
@@ -491,7 +480,9 @@ jobs:
             build/WORLD_LIFE_3D-release.aab
 
           test -s build/WORLD_LIFE_3D-release.aab
-          echo "Signed Google Play AAB exported."
+
+          echo "Signed Google Play AAB exported successfully."
+          ls -lh build/WORLD_LIFE_3D-release.aab
 
       - name: Verify APK and AAB
         shell: bash
